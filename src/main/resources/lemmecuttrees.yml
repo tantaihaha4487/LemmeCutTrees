@@ -1,0 +1,79 @@
+schema-version: 1
+require-shift: true
+clear-leaves: true
+
+cutting-speed:
+  multiplier: 1.0
+  minimum-ticks-per-log: 1
+  maximum-ticks-per-log: 200
+
+detection:
+  scan-distance: 256
+  required-logs: 4
+  required-leaves: 10
+  maximum-logs: 250
+  maximum-cut-height: 5
+  leaf-detect-range: 6
+  leaf-break-range: 6
+  maximum-horizontal-log-run: 6
+  minimum-vertical-log-ratio: 0.5
+  include-player-placed-leaves: false
+
+allowed-axes:
+  - minecraft:wooden_axe
+  - minecraft:stone_axe
+  - minecraft:copper_axe
+  - minecraft:iron_axe
+  - minecraft:golden_axe
+  - minecraft:diamond_axe
+  - minecraft:netherite_axe
+
+trees:
+  - name: oak
+    logs: [minecraft:oak_log, minecraft:oak_wood]
+    leaves: [minecraft:oak_leaves]
+  - name: azalea
+    logs: [minecraft:oak_log, minecraft:oak_wood]
+    leaves: [minecraft:azalea_leaves, minecraft:flowering_azalea_leaves]
+    diagonal-leaves: true
+  - name: birch
+    logs: [minecraft:birch_log, minecraft:birch_wood]
+    leaves: [minecraft:birch_leaves]
+  - name: spruce
+    logs: [minecraft:spruce_log, minecraft:spruce_wood]
+    leaves: [minecraft:spruce_leaves]
+  - name: jungle
+    logs: [minecraft:jungle_log, minecraft:jungle_wood]
+    leaves: [minecraft:jungle_leaves]
+  - name: dark_oak
+    logs: [minecraft:dark_oak_log, minecraft:dark_oak_wood]
+    leaves: [minecraft:dark_oak_leaves]
+  - name: acacia
+    logs: [minecraft:acacia_log, minecraft:acacia_wood]
+    leaves: [minecraft:acacia_leaves]
+  - name: mangrove
+    logs: [minecraft:mangrove_log, minecraft:mangrove_wood]
+    leaves: [minecraft:mangrove_leaves, minecraft:mangrove_roots]
+    diagonal-leaves: true
+    required-logs: 3
+    leaf-detect-range: 16
+    leaf-break-range: 16
+    maximum-horizontal-log-run: 16
+  - name: cherry
+    logs: [minecraft:cherry_log, minecraft:cherry_wood]
+    leaves: [minecraft:cherry_leaves]
+  - name: pale_oak
+    logs: [minecraft:pale_oak_log, minecraft:pale_oak_wood]
+    leaves: [minecraft:pale_oak_leaves]
+  - name: crimson_fungus
+    logs: [minecraft:crimson_stem, minecraft:crimson_hyphae]
+    leaves: [minecraft:nether_wart_block, minecraft:shroomlight]
+    diagonal-leaves: true
+    leaf-detect-range: 8
+    leaf-break-range: 8
+  - name: warped_fungus
+    logs: [minecraft:warped_stem, minecraft:warped_hyphae]
+    leaves: [minecraft:warped_wart_block, minecraft:shroomlight]
+    diagonal-leaves: true
+    leaf-detect-range: 8
+    leaf-break-range: 8
