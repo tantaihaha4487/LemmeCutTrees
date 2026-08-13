@@ -4,7 +4,9 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerLifecycleEvents;
 import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.core.BlockPos;
+import net.minecraft.core.Direction;
 import net.minecraft.core.registries.BuiltInRegistries;
+import net.minecraft.network.chat.Component;
 import net.minecraft.resources.ResourceKey;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
@@ -16,24 +18,30 @@ import net.minecraft.world.level.Level;
 import net.minecraft.world.level.block.LeavesBlock;
 import net.minecraft.world.level.block.RotatedPillarBlock;
 import net.minecraft.world.level.block.state.BlockState;
-import net.minecraft.core.Direction;
 import net.thanachot.lemmecuttrees.config.ConfigManager;
 import net.thanachot.lemmecuttrees.config.ModConfig;
 import net.thanachot.lemmecuttrees.core.CuttingTiming;
+import net.thanachot.lemmecuttrees.core.DurabilityBudget;
 import net.thanachot.lemmecuttrees.core.GridPos;
 import net.thanachot.lemmecuttrees.core.TreeDetector;
 
+import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Iterator;
 import java.util.List;
+import java.util.ListIterator;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 import java.util.UUID;
 
 public final class MinecraftTreeService {
     private final ConfigManager configs;
     private final TreeDetector detector = new TreeDetector();
     private final Map<UUID, PendingCapture> captures = new HashMap<>();
-    private final Map<UUID, Operation> operations = new HashMap<>();
+    private final Map<UUID, List<Operation>> operations = new HashMap<>();
+    private final Set<UUID> internalBreaks = new HashSet<>();
 
     public MinecraftTreeService(ConfigManager configs) {
         this.configs = configs;
@@ -52,15 +60,24 @@ public final class MinecraftTreeService {
                                 net.minecraft.world.level.block.entity.BlockEntity blockEntity) {
         if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayer)) return true;
         UUID playerId = serverPlayer.getUUID();
+        if (internalBreaks.contains(playerId)) return true;
         captures.remove(playerId);
         ModConfig config = configs.current();
-        if (operations.containsKey(playerId) || (config.requireShift() && !serverPlayer.isShiftKeyDown()) ||
+        if ((config.requireShift() && !serverPlayer.isShiftKeyDown()) ||
                 !isAllowedAxe(serverPlayer, config)) return true;
 
         GridPos origin = fromMinecraft(position);
         Optional<TreeDetector.DetectedTree> detected = detector.detect(pos -> node(serverLevel, pos), origin, config);
-        detected.ifPresent(tree -> captures.put(playerId,
-                new PendingCapture(serverLevel.dimension(), position.immutable(), state, tree)));
+        detected.ifPresent(tree -> {
+            if (hasDurabilityFor(playerId, serverPlayer, tree.logs().size())) {
+                captures.put(playerId, new PendingCapture(serverLevel.dimension(), position.immutable(), state, tree));
+            } else {
+                int reserved = reservedLogs(playerId);
+                int available = remainingDurability(serverPlayer.getMainHandItem());
+                serverPlayer.sendSystemMessage(Component.literal("Not enough axe durability: this tree needs " +
+                        tree.logs().size() + ", " + reserved + " already reserved, " + available + " remaining"), true);
+            }
+        });
         return true;
     }
 
@@ -69,40 +86,51 @@ public final class MinecraftTreeService {
         if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayer)) return;
         PendingCapture capture = captures.remove(serverPlayer.getUUID());
         if (capture == null || !capture.dimension().equals(serverLevel.dimension()) ||
-                !capture.origin().equals(position) || !capture.initialState().equals(state) ||
-                operations.containsKey(serverPlayer.getUUID())) return;
+                !capture.origin().equals(position) || !capture.initialState().equals(state)) return;
 
         List<GridPos> remainingLogs = capture.tree().logs().stream()
                 .filter(log -> !log.equals(fromMinecraft(position))).toList();
         Operation operation = new Operation(serverLevel.dimension(), capture.tree(), remainingLogs, 0, 0, false, 0);
-        operations.put(serverPlayer.getUUID(), scheduleNext(serverPlayer, operation, serverLevel.getServer().getTickCount()));
+        operations.computeIfAbsent(serverPlayer.getUUID(), ignored -> new ArrayList<>())
+                .add(scheduleNext(serverPlayer, operation, serverLevel.getServer().getTickCount()));
     }
 
     private void tick(MinecraftServer server) {
         int tick = server.getTickCount();
-        operations.entrySet().removeIf(entry -> {
+        Iterator<Map.Entry<UUID, List<Operation>>> players = operations.entrySet().iterator();
+        while (players.hasNext()) {
+            Map.Entry<UUID, List<Operation>> entry = players.next();
             ServerPlayer player = server.getPlayerList().getPlayer(entry.getKey());
-            Operation operation = entry.getValue();
-            if (!validPlayer(player, operation, server)) return true;
-            if (tick < operation.dueTick()) return false;
-            ServerLevel level = player.level();
-
-            if (!operation.leafPhase()) {
-                Operation advanced = breakNextLog(player, level, operation, tick);
-                if (advanced == null) return true;
-                entry.setValue(advanced);
-                return advanced.leafPhase() && advanced.leafIndex() >= advanced.tree().leaves().size();
+            ListIterator<Operation> iterator = entry.getValue().listIterator();
+            while (iterator.hasNext()) {
+                Operation operation = iterator.next();
+                if (!validPlayer(player, operation, server)) {
+                    iterator.remove();
+                    continue;
+                }
+                if (tick < operation.dueTick()) continue;
+                Operation advanced = advance(player, operation, tick);
+                if (advanced == null) iterator.remove();
+                else iterator.set(advanced);
             }
+            if (entry.getValue().isEmpty()) players.remove();
+        }
+    }
 
-            int leafIndex = operation.leafIndex();
-            if (leafIndex >= operation.tree().leaves().size()) return true;
-            GridPos leaf = operation.tree().leaves().get(leafIndex);
-            if (matchesExpected(level, leaf, operation.tree()) && leafAllowed(level, leaf) &&
-                    level.mayInteract(player, toMinecraft(leaf))) breakLeafWithoutDurability(player, toMinecraft(leaf));
-            entry.setValue(new Operation(operation.dimension(), operation.tree(), operation.logs(), operation.logIndex(),
-                    operation.dueTick(), true, leafIndex + 1));
-            return leafIndex + 1 >= operation.tree().leaves().size();
-        });
+    private Operation advance(ServerPlayer player, Operation operation, int tick) {
+        ServerLevel level = player.level();
+        if (!operation.leafPhase()) return breakNextLog(player, level, operation, tick);
+
+        int leafIndex = operation.leafIndex();
+        if (leafIndex >= operation.tree().leaves().size()) return null;
+        GridPos leaf = operation.tree().leaves().get(leafIndex);
+        if (matchesExpected(level, leaf, operation.tree()) && leafAllowed(level, leaf) &&
+                level.mayInteract(player, toMinecraft(leaf))) {
+            destroyQueuedBlock(player, toMinecraft(leaf), true);
+        }
+        if (leafIndex + 1 >= operation.tree().leaves().size()) return null;
+        return new Operation(operation.dimension(), operation.tree(), operation.logs(), operation.logIndex(),
+                operation.dueTick(), true, leafIndex + 1);
     }
 
     private Operation breakNextLog(ServerPlayer player, ServerLevel level, Operation operation, int tick) {
@@ -111,7 +139,7 @@ public final class MinecraftTreeService {
         int nextIndex = operation.logIndex() + 1;
         BlockPos minecraftPosition = toMinecraft(position);
         if (matchesExpected(level, position, operation.tree()) && level.mayInteract(player, minecraftPosition)) {
-            player.gameMode.destroyBlock(minecraftPosition);
+            destroyQueuedBlock(player, minecraftPosition, false);
         }
         Operation advanced = new Operation(operation.dimension(), operation.tree(), operation.logs(), nextIndex,
                 tick, false, 0);
@@ -166,6 +194,32 @@ public final class MinecraftTreeService {
         }
     }
 
+    private void destroyQueuedBlock(ServerPlayer player, BlockPos position, boolean preserveDurability) {
+        UUID playerId = player.getUUID();
+        internalBreaks.add(playerId);
+        try {
+            if (preserveDurability) breakLeafWithoutDurability(player, position);
+            else player.gameMode.destroyBlock(position);
+        } finally {
+            internalBreaks.remove(playerId);
+        }
+    }
+
+    private boolean hasDurabilityFor(UUID playerId, ServerPlayer player, int newTreeLogs) {
+        if (player.isCreative()) return true;
+        ItemStack axe = player.getMainHandItem();
+        if (!axe.isDamageableItem()) return axe.getMaxDamage() > 0;
+        return DurabilityBudget.canReserve(remainingDurability(axe), reservedLogs(playerId), newTreeLogs);
+    }
+
+    private int reservedLogs(UUID playerId) {
+        return operations.getOrDefault(playerId, List.of()).stream().mapToInt(Operation::remainingLogs).sum();
+    }
+
+    private static int remainingDurability(ItemStack stack) {
+        return Math.max(0, stack.getMaxDamage() - stack.getDamageValue());
+    }
+
     private static boolean isAllowedAxe(ServerPlayer player, ModConfig config) {
         String id = BuiltInRegistries.ITEM.getKey(player.getMainHandItem().getItem()).toString();
         return config.allowedAxes().contains(id);
@@ -201,11 +255,16 @@ public final class MinecraftTreeService {
     private void clear() {
         captures.clear();
         operations.clear();
+        internalBreaks.clear();
     }
 
     private record PendingCapture(ResourceKey<Level> dimension, BlockPos origin, BlockState initialState,
                                   TreeDetector.DetectedTree tree) {}
 
     private record Operation(ResourceKey<Level> dimension, TreeDetector.DetectedTree tree, List<GridPos> logs,
-                             int logIndex, int dueTick, boolean leafPhase, int leafIndex) {}
+                             int logIndex, int dueTick, boolean leafPhase, int leafIndex) {
+        int remainingLogs() {
+            return leafPhase ? 0 : Math.max(0, logs.size() - logIndex);
+        }
+    }
 }
