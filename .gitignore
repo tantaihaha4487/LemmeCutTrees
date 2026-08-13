@@ -1,0 +1,16 @@
+.gradle/
+.idea/
+.vscode/
+build/
+out/
+run/
+*.iml
+
+# Local agent configuration and instructions
+AGENTS.md
+.agents/
+.codex/
+skills-lock.json
+
+# Upstream Paper source used only as a migration reference
+tree-feller/

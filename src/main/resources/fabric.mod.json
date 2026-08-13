@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "lemmecuttrees",
+  "version": "${version}",
+  "name": "LemmeCutTrees",
+  "description": "A lightweight, server-authoritative tree felling mod with vanilla drops and tool behavior.",
+  "authors": ["tantaihaha4487"],
+  "contributors": ["TreeFeller by ThizThizzyDizzy"],
+  "contact": {
+    "sources": "https://github.com/tantaihaha4487/LemmeCutTrees",
+    "issues": "https://github.com/tantaihaha4487/LemmeCutTrees/issues"
+  },
+  "license": "GPL-3.0-only",
+  "environment": "*",
+  "entrypoints": {
+    "main": [
+      "net.thanachot.lemmecuttrees.LemmeCutTrees"
+    ]
+  },
+  "depends": {
+    "fabricloader": ">=${loader_version}",
+    "fabric-api": ">=${fabric_version}",
+    "minecraft": "~${minecraft_version}",
+    "java": ">=25"
+  }
+}

@@ -1,0 +1,8 @@
+LemmeCutTrees
+
+This project ports a deliberately limited subset of behavior from TreeFeller
+1.30.2 by ThizThizzyDizzy:
+https://github.com/ThizThizzyDizzy/tree-feller
+
+TreeFeller and this derivative work are licensed under the GNU General Public
+License version 3. See LICENSE.
