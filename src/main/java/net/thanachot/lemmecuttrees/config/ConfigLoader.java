@@ -11,7 +11,6 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.LinkedHashSet;
@@ -30,7 +29,7 @@ public final class ConfigLoader {
         if (Files.notExists(path)) {
             try (InputStream input = ConfigLoader.class.getResourceAsStream("/" + FILE_NAME)) {
                 if (input == null) throw new IOException("Missing bundled default " + FILE_NAME);
-                Files.copy(input, path, StandardCopyOption.COPY_ATTRIBUTES);
+                Files.copy(input, path);
             }
         }
         return load(path);
