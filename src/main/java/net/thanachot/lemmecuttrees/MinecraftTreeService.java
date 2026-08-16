@@ -5,12 +5,20 @@ import net.fabricmc.fabric.api.event.lifecycle.v1.ServerTickEvents;
 import net.fabricmc.fabric.api.event.player.PlayerBlockBreakEvents;
 import net.minecraft.core.BlockPos;
 import net.minecraft.core.Direction;
+import net.minecraft.core.Holder;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.network.chat.Component;
+import net.minecraft.network.chat.MutableComponent;
+import net.minecraft.network.chat.Style;
+import net.minecraft.network.chat.TextColor;
 import net.minecraft.resources.ResourceKey;
+import net.minecraft.network.protocol.game.ClientboundSoundPacket;
 import net.minecraft.server.MinecraftServer;
 import net.minecraft.server.level.ServerLevel;
 import net.minecraft.server.level.ServerPlayer;
+import net.minecraft.sounds.SoundEvent;
+import net.minecraft.sounds.SoundEvents;
+import net.minecraft.sounds.SoundSource;
 import net.minecraft.world.InteractionHand;
 import net.minecraft.world.entity.player.Player;
 import net.minecraft.world.item.ItemStack;
@@ -37,11 +45,14 @@ import java.util.Set;
 import java.util.UUID;
 
 public final class MinecraftTreeService {
+    private static final int ACTIONBAR_REFRESH_TICKS = 20;
+
     private final ConfigManager configs;
     private final TreeDetector detector = new TreeDetector();
     private final Map<UUID, PendingCapture> captures = new HashMap<>();
     private final Map<UUID, List<Operation>> operations = new HashMap<>();
     private final Set<UUID> internalBreaks = new HashSet<>();
+    private final Set<UUID> feedbackActive = new HashSet<>();
 
     public MinecraftTreeService(ConfigManager configs) {
         this.configs = configs;
@@ -50,8 +61,10 @@ public final class MinecraftTreeService {
     public void register() {
         PlayerBlockBreakEvents.BEFORE.register(this::beforeBreak);
         PlayerBlockBreakEvents.AFTER.register(this::afterBreak);
-        PlayerBlockBreakEvents.CANCELED.register((level, player, position, state, blockEntity) ->
-                captures.remove(player.getUUID()));
+        PlayerBlockBreakEvents.CANCELED.register((level, player, position, state, blockEntity) -> {
+            if (internalBreaks.contains(player.getUUID())) return;
+            captures.remove(player.getUUID());
+        });
         ServerTickEvents.END_SERVER_TICK.register(this::tick);
         ServerLifecycleEvents.SERVER_STOPPING.register(server -> clear());
     }
@@ -84,6 +97,7 @@ public final class MinecraftTreeService {
     private void afterBreak(Level level, Player player, BlockPos position, BlockState state,
                             net.minecraft.world.level.block.entity.BlockEntity blockEntity) {
         if (!(level instanceof ServerLevel serverLevel) || !(player instanceof ServerPlayer serverPlayer)) return;
+        if (internalBreaks.contains(serverPlayer.getUUID())) return;
         PendingCapture capture = captures.remove(serverPlayer.getUUID());
         if (capture == null || !capture.dimension().equals(serverLevel.dimension()) ||
                 !capture.origin().equals(position) || !capture.initialState().equals(state)) return;
@@ -91,8 +105,10 @@ public final class MinecraftTreeService {
         List<GridPos> remainingLogs = capture.tree().logs().stream()
                 .filter(log -> !log.equals(fromMinecraft(position))).toList();
         Operation operation = new Operation(serverLevel.dimension(), capture.tree(), remainingLogs, 0, 0, false, 0);
-        operations.computeIfAbsent(serverPlayer.getUUID(), ignored -> new ArrayList<>())
+        UUID playerId = serverPlayer.getUUID();
+        operations.computeIfAbsent(playerId, ignored -> new ArrayList<>())
                 .add(scheduleNext(serverPlayer, operation, serverLevel.getServer().getTickCount()));
+        if (feedbackActive.add(playerId)) sendFeedback(serverPlayer, true);
     }
 
     private void tick(MinecraftServer server) {
@@ -114,6 +130,24 @@ public final class MinecraftTreeService {
                 else iterator.set(advanced);
             }
             if (entry.getValue().isEmpty()) players.remove();
+        }
+        updateFeedback(server);
+    }
+
+    private void updateFeedback(MinecraftServer server) {
+        ModConfig config = configs.current();
+        Iterator<UUID> activePlayers = feedbackActive.iterator();
+        while (activePlayers.hasNext()) {
+            UUID playerId = activePlayers.next();
+            ServerPlayer player = server.getPlayerList().getPlayer(playerId);
+            if (player == null || !player.isAlive()) {
+                activePlayers.remove();
+            } else if (!isAllowedAxe(player, config)) {
+                sendFeedback(player, false);
+                activePlayers.remove();
+            } else if (server.getTickCount() % ACTIONBAR_REFRESH_TICKS == 0) {
+                sendActionbar(player, true);
+            }
         }
     }
 
@@ -225,6 +259,26 @@ public final class MinecraftTreeService {
         return config.allowedAxes().contains(id);
     }
 
+    private static void sendFeedback(ServerPlayer player, boolean activated) {
+        sendActionbar(player, activated);
+
+        Holder<SoundEvent> sound = activated
+                ? BuiltInRegistries.SOUND_EVENT.wrapAsHolder(SoundEvents.PLAYER_LEVELUP)
+                : BuiltInRegistries.SOUND_EVENT.wrapAsHolder(SoundEvents.ENDERMAN_TELEPORT);
+        player.connection.send(new ClientboundSoundPacket(sound, SoundSource.MASTER,
+                player.getX(), player.getY(), player.getZ(), activated ? 0.6F : 1.0F,
+                activated ? 0.7F : 0.5F, player.getRandom().nextLong()));
+    }
+
+    private static void sendActionbar(ServerPlayer player, boolean activated) {
+        int color = activated ? 0x55EA80 : 0xFF5555;
+        MutableComponent prefix = Component.literal("(i) ")
+                .withStyle(Style.EMPTY.withBold(true).withColor(TextColor.fromRgb(0xFFD700)));
+        MutableComponent name = Component.literal("LemmeCutTrees " + (activated ? "Activated" : "Deactivated"))
+                .withStyle(Style.EMPTY.withColor(TextColor.fromRgb(color)));
+        player.sendOverlayMessage(prefix.append(name));
+    }
+
     private static TreeDetector.Node node(ServerLevel level, GridPos position) {
         BlockState state = level.getBlockState(toMinecraft(position));
         TreeDetector.Node.Axis axis = TreeDetector.Node.Axis.NONE;
@@ -256,6 +310,7 @@ public final class MinecraftTreeService {
         captures.clear();
         operations.clear();
         internalBreaks.clear();
+        feedbackActive.clear();
     }
 
     private record PendingCapture(ResourceKey<Level> dimension, BlockPos origin, BlockState initialState,
