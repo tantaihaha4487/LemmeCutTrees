@@ -37,8 +37,7 @@ jobs:
 
       - name: Prepare versioned release asset
         shell: bash
-        run: cp "build/libs/lemmecuttrees-${{ steps.version.outputs.version }}.jar" \
-          "lemmecuttrees-v${{ steps.version.outputs.version }}.jar"
+        run: cp "build/libs/lemmecuttrees-${{ steps.version.outputs.version }}.jar" "lemmecuttrees-v${{ steps.version.outputs.version }}.jar"
 
       - name: Publish GitHub release
         uses: softprops/action-gh-release@v2
