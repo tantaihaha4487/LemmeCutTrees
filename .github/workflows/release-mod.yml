@@ -44,8 +44,10 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          asset="$GITHUB_WORKSPACE/lemmecuttrees-v${{ steps.version.outputs.version }}.jar"
+          test -f "$asset"
           gh release create "v${{ steps.version.outputs.version }}" \
-            "./lemmecuttrees-v${{ steps.version.outputs.version }}.jar" \
+            "$asset" \
             --repo "$GITHUB_REPOSITORY" \
             --target "$GITHUB_SHA" \
             --title "LemmeCutTrees v${{ steps.version.outputs.version }}" \
